@@ -363,6 +363,7 @@ def run_sweep(model, mode, config_path, retention_override=None, retentions_over
                 "git_commit_available": bool(git_provenance["git_commit_available"]),
                 "git_repo_dir": git_provenance["git_repo_dir"],
                 "git_commit_error": git_provenance["git_commit_error"],
+                "regime_merge_method_default": "pooled_bootstrap",
                 "timestamp_utc": metrics["timestamp_utc"],
             }
 

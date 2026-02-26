@@ -12,5 +12,5 @@ def get_retention_rates(config: Dict) -> List[float]:
 
 
 def retention_dirname(rate: float) -> str:
-    """Stable retention directory naming, e.g. r_0.15."""
-    return f"r_{rate:.2f}"
+    """Stable retention directory naming with 3 decimals to avoid collisions."""
+    return f"r_{rate:.3f}"
