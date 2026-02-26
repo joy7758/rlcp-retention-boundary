@@ -1,4 +1,9 @@
-# rlcp-retention-boundary
+# RLCP – Retention Boundary Report
+
+Zenodo DOI (v1.0):
+https://doi.org/10.5281/zenodo.18789753
+
+This repository corresponds exactly to the archived Zenodo release.
 
 Reproducible retention-dependent structural transition under controlled unlearning (RLCP).
 
