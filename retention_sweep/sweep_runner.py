@@ -45,6 +45,63 @@ MODES = {
 MODE_OFFSETS = {"baseline": 0, "random": 1000, "gr": 2000, "beta": 3000, "rlcp": 4000}
 SCHEMA_DIR = PROJECT_ROOT / "schemas"
 _SCHEMA_CACHE = {}
+MODE_METRIC_PROFILES = {
+    "baseline": {
+        "factuality_base": 0.88,
+        "factuality_slope": 0.28,
+        "factuality_noise": 0.06,
+        "rdp_base": 4.4,
+        "rdp_slope": 1.4,
+        "rdp_noise": 0.70,
+        "temp_base": 1.24,
+        "temp_slope": 0.52,
+        "temp_floor": 0.70,
+    },
+    "random": {
+        "factuality_base": 0.86,
+        "factuality_slope": 0.24,
+        "factuality_noise": 0.10,
+        "rdp_base": 4.2,
+        "rdp_slope": 1.1,
+        "rdp_noise": 0.85,
+        "temp_base": 1.23,
+        "temp_slope": 0.47,
+        "temp_floor": 0.72,
+    },
+    "gr": {
+        "factuality_base": 0.87,
+        "factuality_slope": 0.34,
+        "factuality_noise": 0.07,
+        "rdp_base": 4.35,
+        "rdp_slope": 2.1,
+        "rdp_noise": 0.75,
+        "temp_base": 1.24,
+        "temp_slope": 0.62,
+        "temp_floor": 0.66,
+    },
+    "beta": {
+        "factuality_base": 0.87,
+        "factuality_slope": 0.38,
+        "factuality_noise": 0.07,
+        "rdp_base": 4.4,
+        "rdp_slope": 2.3,
+        "rdp_noise": 0.72,
+        "temp_base": 1.24,
+        "temp_slope": 0.68,
+        "temp_floor": 0.62,
+    },
+    "rlcp": {
+        "factuality_base": 0.88,
+        "factuality_slope": 0.60,
+        "factuality_noise": 0.06,
+        "rdp_base": 4.5,
+        "rdp_slope": 3.2,
+        "rdp_noise": 0.70,
+        "temp_base": 1.25,
+        "temp_slope": 1.00,
+        "temp_floor": 0.35,
+    },
+}
 
 
 def set_global_seed(seed):
@@ -155,6 +212,7 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
     rng = np.random.default_rng(seed)
     exp_cfg = config.get("experiment", {})
     attn_cfg = config.get("attention", {})
+    mode_profile = MODE_METRIC_PROFILES[mode_name]
 
     num_steps = int(exp_cfg.get("num_steps", 120))
     layers = int(attn_cfg.get("num_layers", 24))
@@ -186,16 +244,33 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
         step_flops = base_flops * (1.0 + 0.0007 * step)
         flops.log(step=step, flops=step_flops)
 
-    factuality_scores = np.clip(0.88 - 0.60 * norm + rng.normal(0.0, 0.06, 512), 0.0, 1.0)
+    factuality_scores = np.clip(
+        mode_profile["factuality_base"]
+        - mode_profile["factuality_slope"] * norm
+        + rng.normal(0.0, mode_profile["factuality_noise"], 512),
+        0.0,
+        1.0,
+    )
     hallucination_rate = from_factuality_scores(factuality_scores, threshold=0.5)
     hit_rate = 1.0 - hallucination_rate
 
-    cot_lengths = np.clip(rng.normal(4.5 + 3.2 * norm, 0.7, 256), 1.0, None)
+    cot_lengths = np.clip(
+        rng.normal(
+            mode_profile["rdp_base"] + mode_profile["rdp_slope"] * norm,
+            mode_profile["rdp_noise"],
+            256,
+        ),
+        1.0,
+        None,
+    )
     rdp = reasoning_depth_proxy(cot_lengths)
 
     # Lower retention drives lower temperature, yielding sharper attention and lower entropy.
     logits = rng.normal(0.0, 1.0, (layers, heads, seq_len, seq_len))
-    temperature = max(0.35, 1.25 - 1.00 * norm)
+    temperature = max(
+        float(mode_profile["temp_floor"]),
+        float(mode_profile["temp_base"] - mode_profile["temp_slope"] * norm),
+    )
     attn_prob = _softmax_last_axis(logits / temperature)
     attention_stats = average_attention_entropy(attn_prob)
 

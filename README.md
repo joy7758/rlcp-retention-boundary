@@ -16,6 +16,7 @@ source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -r requirements.txt
 bash run_experiments.sh rlcp --model 0.5B --retention 0.07 --seeds 1
+python analysis/regime_detector.py --results-dir results/0.5B/rlcp --merge-method pooled
 ```
 
 ## Modes
@@ -30,5 +31,6 @@ bash run_experiments.sh rlcp --model 0.5B --retention 0.07 --seeds 1
 
 - Version-pinned dependencies in `requirements.txt`.
 - JSON Schema validation for `metrics.json`, `attention_stats.json`, and `flops.json`.
-- `run_config.yaml` includes `run_id` and `git_commit`.
+- `run_config.yaml` includes deterministic `run_id`, `git_commit`, and repo path.
 - `analysis/collect_results.py` exports a flat `results.csv`.
+- Outputs are namespaced by mode: `results/<model>/<mode>/seed_xxx/r_xx`.
