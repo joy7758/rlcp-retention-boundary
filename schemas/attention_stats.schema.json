@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Attention Entropy Stats",
+  "type": "object",
+  "required": ["per_layer_entropy", "mean_entropy"],
+  "properties": {
+    "per_layer_entropy": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "number", "minimum": 0.0}
+    },
+    "mean_entropy": {"type": "number", "minimum": 0.0}
+  },
+  "additionalProperties": true
+}

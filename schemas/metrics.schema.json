@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RLCP Metrics",
+  "type": "object",
+  "required": [
+    "timestamp_utc",
+    "run_id",
+    "model",
+    "mode",
+    "retention_rate",
+    "seed",
+    "seed_index",
+    "hallucination_rate",
+    "hit_rate",
+    "reasoning_depth_proxy",
+    "mean_attention_entropy",
+    "mean_loss",
+    "final_loss",
+    "num_steps"
+  ],
+  "properties": {
+    "timestamp_utc": {"type": "string"},
+    "run_id": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "mode": {
+      "type": "string",
+      "enum": ["baseline", "random", "gr", "beta", "rlcp"]
+    },
+    "retention_rate": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "seed": {"type": "integer"},
+    "seed_index": {"type": "integer", "minimum": 1},
+    "hallucination_rate": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "hit_rate": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "reasoning_depth_proxy": {"type": "number", "minimum": 0.0},
+    "mean_attention_entropy": {"type": "number", "minimum": 0.0},
+    "mean_loss": {"type": "number"},
+    "final_loss": {"type": "number"},
+    "num_steps": {"type": "integer", "minimum": 1}
+  },
+  "additionalProperties": true
+}
