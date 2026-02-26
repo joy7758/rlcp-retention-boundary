@@ -46,6 +46,7 @@ def collect_rows(results_root):
             {
                 "run_id": metrics.get("run_id"),
                 "model": metrics.get("model"),
+                "task": metrics.get("task", runtime.get("task", "default")),
                 "mode": metrics.get("mode"),
                 "retention_rate": metrics.get("retention_rate"),
                 "seed": metrics.get("seed"),
@@ -88,7 +89,7 @@ def write_csv(rows, out_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Collect RLCP experiment results into a CSV")
-    parser.add_argument("--results-root", default="results", help="Root results directory")
+    parser.add_argument("--results-root", "--root", dest="results_root", default="results", help="Root results directory")
     parser.add_argument("--out", default="results/results.csv", help="CSV output path")
     args = parser.parse_args()
 

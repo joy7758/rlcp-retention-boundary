@@ -102,6 +102,29 @@ MODE_METRIC_PROFILES = {
         "temp_floor": 0.35,
     },
 }
+TASK_FACTORS = {
+    "default": {
+        "factuality_base_delta": 0.0,
+        "factuality_slope_scale": 1.00,
+        "rdp_slope_scale": 1.00,
+        "temp_slope_scale": 1.00,
+        "noise_scale": 1.00,
+    },
+    "gsm8k": {
+        "factuality_base_delta": -0.02,
+        "factuality_slope_scale": 1.05,
+        "rdp_slope_scale": 1.08,
+        "temp_slope_scale": 1.08,
+        "noise_scale": 1.00,
+    },
+    "strategyqa": {
+        "factuality_base_delta": 0.00,
+        "factuality_slope_scale": 0.98,
+        "rdp_slope_scale": 1.02,
+        "temp_slope_scale": 1.00,
+        "noise_scale": 1.00,
+    },
+}
 
 
 def set_global_seed(seed):
@@ -160,6 +183,14 @@ def _retention_norm(rate):
     return (max_r - rate) / (max_r - min_r)
 
 
+def _task_offset(task):
+    return sum(ord(ch) for ch in str(task)) % 10000
+
+
+def _task_factors(task):
+    return TASK_FACTORS.get(str(task).lower(), TASK_FACTORS["default"])
+
+
 def _softmax_last_axis(logits):
     shifted = logits - np.max(logits, axis=-1, keepdims=True)
     exp = np.exp(shifted)
@@ -208,11 +239,12 @@ def resolve_git_provenance(project_root):
     }
 
 
-def simulate_single_retention(rate, model, mode_name, mode_module, config, seed, seed_index, run_id):
+def simulate_single_retention(rate, model, task, mode_name, mode_module, config, seed, seed_index, run_id):
     rng = np.random.default_rng(seed)
     exp_cfg = config.get("experiment", {})
     attn_cfg = config.get("attention", {})
     mode_profile = MODE_METRIC_PROFILES[mode_name]
+    task_factor = _task_factors(task)
 
     num_steps = int(exp_cfg.get("num_steps", 120))
     layers = int(attn_cfg.get("num_layers", 24))
@@ -245,9 +277,9 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
         flops.log(step=step, flops=step_flops)
 
     factuality_scores = np.clip(
-        mode_profile["factuality_base"]
-        - mode_profile["factuality_slope"] * norm
-        + rng.normal(0.0, mode_profile["factuality_noise"], 512),
+        mode_profile["factuality_base"] + task_factor["factuality_base_delta"]
+        - (mode_profile["factuality_slope"] * task_factor["factuality_slope_scale"]) * norm
+        + rng.normal(0.0, mode_profile["factuality_noise"] * task_factor["noise_scale"], 512),
         0.0,
         1.0,
     )
@@ -257,7 +289,7 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
     cot_lengths = np.clip(
         rng.normal(
             mode_profile["rdp_base"] + mode_profile["rdp_slope"] * norm,
-            mode_profile["rdp_noise"],
+            mode_profile["rdp_noise"] * task_factor["noise_scale"],
             256,
         ),
         1.0,
@@ -269,7 +301,7 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
     logits = rng.normal(0.0, 1.0, (layers, heads, seq_len, seq_len))
     temperature = max(
         float(mode_profile["temp_floor"]),
-        float(mode_profile["temp_base"] - mode_profile["temp_slope"] * norm),
+        float(mode_profile["temp_base"] - (mode_profile["temp_slope"] * task_factor["temp_slope_scale"]) * norm),
     )
     attn_prob = _softmax_last_axis(logits / temperature)
     attention_stats = average_attention_entropy(attn_prob)
@@ -278,6 +310,7 @@ def simulate_single_retention(rate, model, mode_name, mode_module, config, seed,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "run_id": run_id,
         "model": model,
+        "task": task,
         "mode": mode_name,
         "retention_rate": float(rate),
         "seed": int(seed),
@@ -304,7 +337,7 @@ def parse_retentions_csv(retentions_text):
     return values
 
 
-def run_sweep(model, mode, config_path, retention_override=None, retentions_override=None, seeds=1):
+def run_sweep(model, mode, config_path, task="default", retention_override=None, retentions_override=None, seeds=1):
     if seeds < 1:
         raise ValueError("--seeds must be >= 1")
 
@@ -319,7 +352,8 @@ def run_sweep(model, mode, config_path, retention_override=None, retentions_over
         rates = get_retention_rates(config)
     mode_module = MODES[mode]
 
-    results_root = PROJECT_ROOT / config.get("output", {}).get("root_dir", "results") / model / mode
+    task = str(task)
+    results_root = PROJECT_ROOT / config.get("output", {}).get("root_dir", "results") / model / task
     results_root.mkdir(parents=True, exist_ok=True)
 
     git_provenance = resolve_git_provenance(PROJECT_ROOT)
@@ -331,16 +365,23 @@ def run_sweep(model, mode, config_path, retention_override=None, retentions_over
         seed_root.mkdir(parents=True, exist_ok=True)
 
         for rate in rates:
-            run_seed = base_seed + (seed_index - 1) * 10000 + int(round(rate * 1000)) + MODE_OFFSETS[mode]
+            run_seed = (
+                base_seed
+                + (seed_index - 1) * 10000
+                + int(round(rate * 1000))
+                + MODE_OFFSETS[mode]
+                + _task_offset(task)
+            )
             set_global_seed(run_seed)
 
-            run_id = f"{model}-{mode}-s{seed_index:03d}-seed{run_seed}-r{rate:.3f}"
+            run_id = f"{model}-{task}-{mode}-s{seed_index:03d}-seed{run_seed}-r{rate:.3f}"
             run_dir = seed_root / retention_dirname(rate)
             run_dir.mkdir(parents=True, exist_ok=True)
 
             metrics, attention_stats, flops_payload = simulate_single_retention(
                 rate=rate,
                 model=model,
+                task=task,
                 mode_name=mode,
                 mode_module=mode_module,
                 config=config,
@@ -353,6 +394,7 @@ def run_sweep(model, mode, config_path, retention_override=None, retentions_over
             run_cfg["runtime"] = {
                 "run_id": run_id,
                 "model": model,
+                "task": task,
                 "mode": mode,
                 "retention_rate": float(rate),
                 "seed": int(run_seed),
@@ -385,8 +427,8 @@ def run_sweep(model, mode, config_path, retention_override=None, retentions_over
             seed_summary.append(metrics)
             summary_all.append(metrics)
             print(
-                f"[done] model={model} mode={mode} seed_idx={seed_index} "
-                f"rate={rate:.2f} -> {run_dir}"
+                f"[done] model={model} task={task} mode={mode} seed_idx={seed_index} "
+                f"rate={rate:.3f} -> {run_dir}"
             )
 
         seed_summary_path = seed_root / f"summary_{mode}.json"
@@ -408,6 +450,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="RLCP retention sweep runner")
     parser.add_argument("--model", required=True, choices=["0.5B", "1.5B", "7B"])
     parser.add_argument("--mode", default="rlcp", choices=["baseline", "random", "gr", "beta", "rlcp"])
+    parser.add_argument("--task", default="default", help="Task namespace, e.g. gsm8k or strategyqa")
     parser.add_argument("--config", default=None, help="Override config path")
     parser.add_argument("--retention", type=float, default=None, help="Run a single retention rate")
     parser.add_argument("--retentions", default=None, help="Comma-separated retention values to run")
@@ -427,6 +470,7 @@ def main():
         model=args.model,
         mode=args.mode,
         config_path=config_path,
+        task=args.task,
         retention_override=args.retention,
         retentions_override=retentions_override,
         seeds=args.seeds,

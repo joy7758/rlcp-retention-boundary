@@ -1,131 +1,98 @@
 #!/usr/bin/env python3
 import argparse
-import json
 from pathlib import Path
 
-import numpy as np
+from plot_utils import (
+    aggregate_metric_by_retention,
+    filter_rows,
+    keep_latest_per_key,
+    load_results_csv,
+    pooled_regime_band_from_rows,
+    set_ieee_style,
+)
 
 
-def _load_rows_for_dir(results_dir):
-    rows = []
-    for r_dir in Path(results_dir).glob("r_*"):
-        metrics_path = r_dir / "metrics.json"
-        attn_path = r_dir / "attention_stats.json"
-        if not metrics_path.exists() or not attn_path.exists():
-            continue
-
-        with open(metrics_path, "r", encoding="utf-8") as f:
-            metrics = json.load(f)
-        with open(attn_path, "r", encoding="utf-8") as f:
-            attn = json.load(f)
-
-        rows.append(
-            {
-                "rate": float(metrics["retention_rate"]),
-                "hr": float(metrics.get("hit_rate", 1.0 - float(metrics["hallucination_rate"]))),
-                "rdp": float(metrics["reasoning_depth_proxy"]),
-                "h_attn": float(attn["mean_entropy"]),
-            }
-        )
-
-    rows.sort(key=lambda x: x["rate"], reverse=True)
-    return rows
-
-
-def _discover_seed_dirs(results_dir):
-    root = Path(results_dir)
-    seed_dirs = sorted([d for d in root.glob("seed_*") if d.is_dir()])
-    if seed_dirs:
-        return seed_dirs
-
-    if any(d.is_dir() for d in root.glob("r_*")):
-        return [root]
-
-    return []
-
-
-def _aggregate_by_rate(seed_rows):
-    by_rate = {}
-    for rows in seed_rows.values():
-        for row in rows:
-            rate = row["rate"]
-            by_rate.setdefault(rate, {"hr": [], "rdp": [], "h_attn": []})
-            by_rate[rate]["hr"].append(row["hr"])
-            by_rate[rate]["rdp"].append(row["rdp"])
-            by_rate[rate]["h_attn"].append(row["h_attn"])
-
-    rates = sorted(by_rate.keys(), reverse=True)
-    hr_mean = [float(np.mean(by_rate[r]["hr"])) for r in rates]
-    rdp_mean = [float(np.mean(by_rate[r]["rdp"])) for r in rates]
-    h_attn_mean = [float(np.mean(by_rate[r]["h_attn"])) for r in rates]
-    return rates, hr_mean, rdp_mean, h_attn_mean
-
-
-def plot_curves(results_dir, out_path):
+def plot_curves(input_csv, model, out_path, task="default", mode="rlcp", dpi=320):
     try:
         import matplotlib.pyplot as plt
     except ImportError as exc:
         raise SystemExit("matplotlib is required. Install with: pip install matplotlib") from exc
 
-    seed_dirs = _discover_seed_dirs(results_dir)
-    if not seed_dirs:
-        raise SystemExit(f"No retention results found in: {results_dir}")
+    set_ieee_style()
 
-    seed_rows = {}
-    for idx, seed_dir in enumerate(seed_dirs, start=1):
-        label = seed_dir.name if seed_dir != Path(results_dir) else f"seed_{idx:03d}"
-        rows = _load_rows_for_dir(seed_dir)
-        if rows:
-            seed_rows[label] = rows
+    rows = load_results_csv(input_csv)
+    rows = filter_rows(rows, model=model, task=task, mode=mode)
+    rows = keep_latest_per_key(rows, key_fields=["seed_index", "retention_rate"])
+    if not rows:
+        raise SystemExit(f"No rows found for model={model}, task={task}, mode={mode} in {input_csv}")
 
-    if not seed_rows:
-        raise SystemExit(f"No retention results found in: {results_dir}")
+    band = pooled_regime_band_from_rows(rows, bootstrap_iters=1000, seed=2026)
 
-    rates, hr_mean, rdp_mean, h_attn_mean = _aggregate_by_rate(seed_rows)
+    metric_specs = [
+        ("hallucination_rate", "Hallucination Rate", "#2f4f4f"),
+        ("reasoning_depth_proxy", "Reasoning Depth Proxy", "#1f77b4"),
+        ("mean_attention_entropy", "Attention Entropy", "#5c6f7b"),
+    ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2), constrained_layout=True)
 
-    for label, rows in seed_rows.items():
-        r = [x["rate"] for x in rows]
-        axes[0].plot(r, [x["hr"] for x in rows], marker="o", alpha=0.35, linewidth=1, label=label)
-        axes[1].plot(r, [x["rdp"] for x in rows], marker="o", alpha=0.35, linewidth=1, label=label)
-        axes[2].plot(r, [x["h_attn"] for x in rows], marker="o", alpha=0.35, linewidth=1, label=label)
+    for ax, (metric_key, ylabel, color) in zip(axes, metric_specs):
+        rates, means, cis, counts = aggregate_metric_by_retention(rows, metric_key=metric_key)
+        lower = [m - c for m, c in zip(means, cis)]
+        upper = [m + c for m, c in zip(means, cis)]
 
-    axes[0].plot(rates, hr_mean, marker="o", color="black", linewidth=2.2, label="mean")
-    axes[1].plot(rates, rdp_mean, marker="o", color="black", linewidth=2.2, label="mean")
-    axes[2].plot(rates, h_attn_mean, marker="o", color="black", linewidth=2.2, label="mean")
+        ax.plot(rates, means, color=color, marker="o", linewidth=2.0)
+        ax.fill_between(rates, lower, upper, color=color, alpha=0.28, linewidth=0.8, edgecolor=color)
 
-    axes[0].set_title("Hit Rate (HR) vs Retention")
-    axes[0].set_xlabel("Retention r")
-    axes[0].set_ylabel("HR")
+        if band is not None:
+            ax.axvspan(band["low"], band["high"], color="#f0ad4e", alpha=0.18)
 
-    axes[1].set_title("Reasoning Depth Proxy vs Retention")
-    axes[1].set_xlabel("Retention r")
-    axes[1].set_ylabel("RDP")
-
-    axes[2].set_title("Attention Entropy vs Retention")
-    axes[2].set_xlabel("Retention r")
-    axes[2].set_ylabel("H_attn")
-
-    for ax in axes:
-        ax.grid(alpha=0.3)
+        ax.set_xlabel("Retention r")
+        ax.set_ylabel(ylabel)
         ax.invert_xaxis()
 
-    axes[0].legend(frameon=False, fontsize=8)
-    fig.tight_layout()
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=180)
-    print(f"Saved plot to: {out_path}")
+    if band is not None:
+        fig.suptitle(f"{model} | task={task} | mode={mode}", y=1.03)
+        axes[0].text(
+            0.02,
+            0.98,
+            (
+                f"r_c ≈ {band['center']:.3f} "
+                f"(CI: [{band['low']:.3f}, {band['high']:.3f}])"
+            ),
+            transform=axes[0].transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.9, "boxstyle": "round,pad=0.25"},
+        )
+    else:
+        fig.suptitle(f"{model} | task={task} | mode={mode} | regime not detected", y=1.03)
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=int(dpi), bbox_inches="tight")
+    print(f"Saved plot to: {out}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot retention sweep curves")
-    parser.add_argument("--results-dir", required=True, help="Path like results/0.5B")
-    parser.add_argument("--out", default="analysis/retention_curves.png")
+    parser = argparse.ArgumentParser(description="Plot retention sweep curves with mean +/- CI")
+    parser.add_argument("--input", required=True, help="CSV from collect_results.py")
+    parser.add_argument("--model", required=True, help="Model label, e.g. 0.5B")
+    parser.add_argument("--task", default="default", help="Task namespace")
+    parser.add_argument("--mode", default="rlcp", help="Experiment mode")
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--dpi", type=int, default=320)
     args = parser.parse_args()
 
-    plot_curves(results_dir=args.results_dir, out_path=args.out)
+    plot_curves(
+        input_csv=args.input,
+        model=args.model,
+        out_path=args.out,
+        task=args.task,
+        mode=args.mode,
+        dpi=args.dpi,
+    )
 
 
 if __name__ == "__main__":

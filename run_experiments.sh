@@ -13,6 +13,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
 fi
 
 MODEL=""
+TASK="default"
 RETENTION=""
 RETENTIONS=""
 SEEDS="1"
@@ -22,6 +23,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --model)
       MODEL="$2"
+      shift 2
+      ;;
+    --task)
+      TASK="$2"
       shift 2
       ;;
     --retention)
@@ -42,7 +47,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown argument: $1"
-      echo "Usage: bash run_experiments.sh [mode] [--model 0.5B|1.5B|7B] [--retention 0.07] [--retentions 0.08,0.07,0.06] [--seeds 3] [--config path]"
+      echo "Usage: bash run_experiments.sh [mode] [--model 0.5B|1.5B|7B] [--task default|gsm8k|strategyqa] [--retention 0.07] [--retentions 0.08,0.07,0.06] [--seeds 3] [--config path]"
       exit 1
       ;;
   esac
@@ -69,7 +74,7 @@ else
 fi
 
 for m in "${MODELS[@]}"; do
-  cmd=("$PYTHON_BIN" "retention_sweep/sweep_runner.py" "--model" "$m" "--mode" "$MODE" "--seeds" "$SEEDS")
+  cmd=("$PYTHON_BIN" "retention_sweep/sweep_runner.py" "--model" "$m" "--mode" "$MODE" "--task" "$TASK" "--seeds" "$SEEDS")
 
   if [[ -n "$RETENTION" ]]; then
     cmd+=("--retention" "$RETENTION")
